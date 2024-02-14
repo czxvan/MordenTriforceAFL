@@ -29,9 +29,9 @@
 #
 
 
-VERSION="2.10.0"
-QEMU_URL="http://download.qemu-project.org/qemu-${VERSION}.tar.xz"
-QEMU_SHA384="68216c935487bc8c0596ac309e1e3ee75c2c4ce898aab796faa321db5740609ced365fedda025678d072d09ac8928105"
+VERSION="8.2.0"
+QEMU_URL="http://download.qemu.org/qemu-${VERSION}.tar.xz"
+QEMU_SHA384="5d79433bcecb8fa4279abf718985c295e5a33fe2b4b95d885fdeb20de2d39e9782707c76e9d3557dbf98e4a6353c9935"
 
 echo "================================================="
 echo "AFL binary-only instrumentation QEMU build script"
@@ -47,7 +47,7 @@ if [ ! "`uname -s`" = "Linux" ]; then
 
 fi
 
-if [ ! -f "patches/afl-qemu-cpu-inl.h" -o ! -f "../config.h" ]; then
+if [ ! -f "patches/afl-qemu-cpu-inl-q8.h" -o ! -f "../config.h" ]; then
 
   echo "[-] Error: key files not found - wrong working directory?"
   exit 1
@@ -134,11 +134,9 @@ cd qemu-$VERSION || exit 1
 
 echo "[*] Applying patches..."
 
-patch -p1 <../patches/elfload.diff || exit 1
-patch -p1 <../patches/cpu-exec.diff || exit 1
-patch -p1 <../patches/syscall.diff || exit 1
-patch -p1 <../patches/configure.diff || exit 1
-patch -p1 <../patches/memfd.diff || exit 1
+patch -p1 <../patches/elfload-q8.diff || exit 1
+patch -p1 <../patches/cpu-exec-q8.diff || exit 1
+patch -p1 <../patches/syscall-q8.diff || exit 1
 
 echo "[+] Patching done."
 
@@ -153,13 +151,13 @@ echo "[+] Configuration complete."
 
 echo "[*] Attempting to build QEMU (fingers crossed!)..."
 
-make || exit 1
+make -j6 || exit 1
 
 echo "[+] Build process successful!"
 
 echo "[*] Copying binary..."
 
-cp -f "${CPU_TARGET}-linux-user/qemu-${CPU_TARGET}" "../../afl-qemu-trace" || exit 1
+cp -f "build/${CPU_TARGET}-linux-user/qemu-${CPU_TARGET}" "../../afl-qemu-trace" || exit 1
 
 cd ..
 ls -l ../afl-qemu-trace || exit 1
