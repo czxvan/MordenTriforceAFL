@@ -1,0 +1,939 @@
+commit 2f42287fb09841abdf3f58814ed68c67fecc947f
+Author: czxvan <2889259641@qq.com>
+Date:   Thu Feb 15 17:31:53 2024 +0800
+
+    preserve basical work progress
+
+diff --git a/.gitignore b/.gitignore
+index 57df30e0d..8764912c0 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -18,3 +18,10 @@ afl-llvm-pass.so
+ afl-llvm-rt-32.o
+ afl-llvm-rt-64.o
+ afl-llvm-rt.o
++
++# qemu mode binaries, seeds abd output.
++afl-qemu-trace
++test-instr-gcc
++test-no-instr
++seeds
++out
+\ No newline at end of file
+diff --git a/qemu_mode/patches/afl-qemu-cpu-inl-q8.h b/qemu_mode/patches/afl-qemu-cpu-inl-q8.h
+index fd5935eea..e059e1c16 100644
+--- a/qemu_mode/patches/afl-qemu-cpu-inl-q8.h
++++ b/qemu_mode/patches/afl-qemu-cpu-inl-q8.h
+@@ -34,6 +34,7 @@
+ */
+ 
+ #include <sys/shm.h>
++#include "afl.h"
+ #include "../../config.h"
+ 
+ /***************************
+@@ -53,12 +54,13 @@
+    _start and does the usual forkserver stuff, not very different from
+    regular instrumentation injected via afl-as.h. */
+ 
+-#define AFL_QEMU_CPU_SNIPPET2 do { \
+-    if(itb->pc == afl_entry_point) { \
++#define AFL_QEMU_CPU_SNIPPET2(env, pc) do { \
++    if(pc == afl_entry_point && pc && getenv("AFLGETWORK") == 0) { \
+       afl_setup(); \
+-      afl_forkserver(cpu); \
++      afl_forkserver(env); \
++      aflStart = 1; \
+     } \
+-    afl_maybe_log(itb->pc); \
++    afl_maybe_log(pc); \
+   } while (0)
+ 
+ /* We use one additional file descriptor to relay "needs translation"
+@@ -68,17 +70,27 @@
+ 
+ /* This is equivalent to afl-as.h: */
+ 
+-static unsigned char *afl_area_ptr;
++static unsigned char *afl_area_ptr = 0;
+ 
+ /* Exported variables populated by the code patched into elfload.c: */
+ 
+-abi_ulong afl_entry_point, /* ELF entry point (_start) */
+-          afl_start_code,  /* .text start pointer      */
+-          afl_end_code;    /* .text end pointer        */
++target_ulong afl_entry_point = 0, /* ELF entry point (_start) */
++          afl_start_code = 0,  /* .text start pointer      */
++          afl_end_code = 0;    /* .text end pointer        */
++
++int aflStart = 0;               /* we've started fuzzing */
++int aflEnableTicks = 0;         /* re-enable ticks for each test */
++int aflGotLog = 0;              /* we've seen dmesg logging */
++
++/* from command line options */
++const char *aflFile = "/tmp/work";
++unsigned long aflPanicAddr = (unsigned long)-1;
++unsigned long aflDmesgAddr = (unsigned long)-1;
+ 
+ /* Set in the child process in forkserver mode: */
+ 
+-static unsigned char afl_fork_child;
++unsigned char afl_fork_child = 0;
++int afl_wants_cpu_to_stop = 0;
+ unsigned int afl_forksrv_pid;
+ 
+ /* Instrumentation ratio: */
+@@ -87,11 +99,9 @@ static unsigned int afl_inst_rms = MAP_SIZE;
+ 
+ /* Function declarations. */
+ 
+-static void afl_setup(void);
+-static void afl_forkserver(CPUState*);
+-static inline void afl_maybe_log(abi_ulong);
++static inline void afl_maybe_log(target_ulong);
+ 
+-static void afl_wait_tsl(CPUState*, int);
++static void afl_wait_tsl(CPUArchState*, int);
+ static void afl_request_tsl(vaddr, uint64_t, uint32_t, uint32_t);
+ 
+ /* Data structure passed around by the translate handlers: */
+@@ -119,7 +129,7 @@ static inline TranslationBlock *tb_lookup(CPUState*, vaddr,
+ 
+ /* Set up SHM region and initialize other stuff. */
+ 
+-static void afl_setup(void) {
++void afl_setup(void) {
+ 
+   char *id_str = getenv(SHM_ENV_VAR),
+        *inst_r = getenv("AFL_INST_RATIO");
+@@ -157,7 +167,7 @@ static void afl_setup(void) {
+   if (getenv("AFL_INST_LIBS")) {
+ 
+     afl_start_code = 0;
+-    afl_end_code   = (abi_ulong)-1;
++    afl_end_code   = (target_ulong)-1;
+ 
+   }
+ 
+@@ -169,10 +179,18 @@ static void afl_setup(void) {
+ 
+ }
+ 
++static ssize_t uninterrupted_read(int fd, void *buf, size_t cnt) {
++
++    ssize_t n;
++
++    while((n = read(fd, buf, cnt)) == -1 && errno == EINTR)
++        continue;
++    return n;
++}
+ 
+ /* Fork server logic, invoked once we hit _start. */
+ 
+-static void afl_forkserver(CPUState *cpu) {
++void afl_forkserver(CPUArchState *env) {
+ 
+   static unsigned char tmp[4];
+ 
+@@ -194,7 +212,7 @@ static void afl_forkserver(CPUState *cpu) {
+ 
+     /* Whoops, parent dead? */
+ 
+-    if (read(FORKSRV_FD, tmp, 4) != 4) exit(2);
++    if (uninterrupted_read(FORKSRV_FD, tmp, 4) != 4) exit(2);
+ 
+     /* Establish a channel with child to grab translation commands. We'll
+        read from t_fd[0], child will write to TSL_FD. */
+@@ -225,7 +243,7 @@ static void afl_forkserver(CPUState *cpu) {
+ 
+     /* Collect translation requests until child dies and closes the pipe. */
+ 
+-    afl_wait_tsl(cpu, t_fd[0]);
++    afl_wait_tsl(env, t_fd[0]);
+ 
+     /* Get and relay exit status to parent. */
+ 
+@@ -237,33 +255,64 @@ static void afl_forkserver(CPUState *cpu) {
+ }
+ 
+ 
+-/* The equivalent of the tuple logging routine from afl-as.h. */
+-
+-static inline void afl_maybe_log(abi_ulong cur_loc) {
+-
+-  static __thread abi_ulong prev_loc;
++static inline target_ulong aflHash(target_ulong cur_loc) {
++  if(!aflStart)
++    return 0;
+ 
+   /* Optimize for cur_loc > afl_end_code, which is the most likely case on
+      Linux systems. */
+ 
+   if (cur_loc > afl_end_code || cur_loc < afl_start_code || !afl_area_ptr)
+-    return;
++    return 0;
++
++#ifdef DEBUG_EDGES
++  if(1) {
++    printf("exec %lx\n", cur_loc);
++    fflush(stdout);
++  }
++#endif
+ 
+   /* Looks like QEMU always maps to fixed locations, so ASAN is not a
+      concern. Phew. But instruction addresses may be aligned. Let's mangle
+      the value to get something quasi-uniform. */
+-
+-  cur_loc  = (cur_loc >> 4) ^ (cur_loc << 8);
+-  cur_loc &= MAP_SIZE - 1;
++  target_ulong h = cur_loc;
++#if TARGET_LONG_BITS == 32
++  h ^= cur_loc >> 16;
++  h *= 0x85ebca6b;
++  h ^= h >> 13;
++  h *= 0xc2b2ae35;
++  h ^= h >> 16;
++#else
++  h ^= cur_loc >> 33;
++  h *= 0xff51afd7ed558ccd;
++  h ^= h >> 33;
++  h *= 0xc4ceb9fe1a85ec53;
++  h ^= h >> 33;
++#endif
++
++  h &= MAP_SIZE - 1;
+ 
+   /* Implement probabilistic instrumentation by looking at scrambled block
+      address. This keeps the instrumented locations stable across runs. */
+ 
+-  if (cur_loc >= afl_inst_rms) return;
++  if (h >= afl_inst_rms) return 0;
++  return h;
++}
++
++/* todo: generate calls to helper_aflMaybeLog during translation */
++static inline void helper_aflMaybeLog(target_ulong cur_loc) {
++  static __thread target_ulong prev_loc;
+ 
+   afl_area_ptr[cur_loc ^ prev_loc]++;
+   prev_loc = cur_loc >> 1;
++}
+ 
++/* The equivalent of the tuple logging routine from afl-as.h. */
++
++static inline void afl_maybe_log(target_ulong cur_loc) {
++  cur_loc = aflHash(cur_loc);
++  if(cur_loc)
++    helper_aflMaybeLog(cur_loc);
+ }
+ 
+ 
+@@ -291,7 +340,7 @@ static void afl_request_tsl(vaddr pc, uint64_t cb, uint32_t flags, uint32_t cfla
+ /* This is the other side of the same channel. Since timeouts are handled by
+    afl-fuzz simply killing the child, we can just wait until the pipe breaks. */
+ 
+-static void afl_wait_tsl(CPUState *cpu, int fd) {
++static void afl_wait_tsl(CPUArchState *env, int fd) {
+ 
+   struct afl_tsl t;
+   TranslationBlock *tb;
+@@ -303,14 +352,8 @@ static void afl_wait_tsl(CPUState *cpu, int fd) {
+     if (read(fd, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
+       break;
+ 
+-    tb = tb_htable_lookup(cpu, t.pc, t.cs_base, t.flags, t.cflags);
+-
+-    if(!tb) {
+-      mmap_lock();
+-      tb_gen_code(cpu, t.pc, t.cs_base, t.flags, 0);
+-      mmap_unlock();
+-    }
+-
++    printf("wait_tsl %lx -- ignore\n", t.pc); fflush(stdout);
++    
+   }
+ 
+   close(fd);
+diff --git a/qemu_mode/patches/afl.h b/qemu_mode/patches/afl.h
+new file mode 100644
+index 000000000..ff40f309c
+--- /dev/null
++++ b/qemu_mode/patches/afl.h
+@@ -0,0 +1,13 @@
++extern const char *aflFile;
++extern unsigned long aflPanicAddr;
++extern unsigned long aflDmesgAddr;
++
++extern int aflEnableTicks;
++extern int aflStart;
++extern int aflGotLog;
++extern target_ulong afl_start_code, afl_end_code;
++extern unsigned char afl_fork_child;
++extern int afl_wants_cpu_to_stop;
++
++void afl_setup(void);
++void afl_forkserver(CPUArchState*);
+\ No newline at end of file
+diff --git a/qemu_mode/patches/aflCall.h b/qemu_mode/patches/aflCall.h
+new file mode 100644
+index 000000000..0ad3bde66
+--- /dev/null
++++ b/qemu_mode/patches/aflCall.h
+@@ -0,0 +1,162 @@
++// XXX lots of shared code here could be factored out
++#include "afl.h"
++
++static target_ulong startForkserver(CPUArchState *env, target_ulong enableTicks)
++{
++    //printf("pid %d: startForkServer\n", getpid()); fflush(stdout);
++    if(afl_fork_child) {
++        /* 
++         * we've already started a fork server. perhaps a test case
++         * accidentally triggered startForkserver again.  Exit the
++         * test case without error.
++         */
++        exit(0);
++    }
++#ifdef CONFIG_USER_ONLY
++    /* we're running in the main thread, get right to it! */
++    afl_setup();
++    afl_forkserver(env);
++#else
++    /*
++     * we're running in a cpu thread. we'll exit the cpu thread
++     * and notify the iothread.  The iothread will run the forkserver
++     * and in the child will restart the cpu thread which will continue
++     * execution.
++     * N.B. We assume a single cpu here!
++     */
++    aflEnableTicks = enableTicks;
++    afl_wants_cpu_to_stop = 1;
++#endif
++    return 0;
++}
++
++/* copy work into ptr[0..sz].  Assumes memory range is locked. */
++static target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz)
++{
++    target_ulong retsz;
++    FILE *fp;
++    unsigned char ch;
++
++    //printf("pid %d: getWork %lx %lx\n", getpid(), ptr, sz);fflush(stdout);
++    assert(aflStart == 0);
++    fp = fopen(aflFile, "rb");
++    if(!fp) {
++         perror(aflFile);
++         return -1;
++    }
++    retsz = 0;
++    while(retsz < sz) {
++        if(fread(&ch, 1, 1, fp) == 0)
++            break;
++        cpu_stb_data(env, ptr, ch);
++        retsz ++;
++        ptr ++;
++    }
++    fclose(fp);
++    return retsz;
++}
++
++static target_ulong startWork(CPUArchState *env, target_ulong ptr)
++{
++    target_ulong start, end;
++
++    //printf("pid %d: ptr %lx\n", getpid(), ptr);fflush(stdout);
++    start = cpu_ldq_data(env, ptr);
++    end = cpu_ldq_data(env, ptr + sizeof start);
++    //printf("pid %d: startWork %lx - %lx\n", getpid(), start, end);fflush(stdout);
++
++    afl_start_code = start;
++    afl_end_code   = end;
++    aflGotLog = 0;
++    aflStart = 1;
++    return 0;
++}
++
++static target_ulong doneWork(target_ulong val)
++{
++    //printf("pid %d: doneWork %lx\n", getpid(), val);fflush(stdout);
++    assert(aflStart == 1);
++/* detecting logging as crashes hasnt been helpful and
++   has occasionally been a problem.  We'll leave it to
++   a post-analysis phase to look over dmesg output for
++   our corpus.
++ */
++#ifdef LETSNOT 
++    if(aflGotLog)
++        exit(64 | val);
++#endif
++    exit(val); /* exit forkserver child */
++}
++
++uint32_t helper_aflCall32(CPUArchState *env, uint32_t code, uint32_t a0, uint32_t a1) {
++    return (uint32_t)helper_aflCall(env, code, a0, a1);
++}
++
++target_ulong helper_aflCall(CPUArchState *env, target_ulong code, target_ulong a0, target_ulong a1) {
++    switch(code) {
++    case 1: return startForkserver(env, a0);
++    case 2: return getWork(env, a0, a1);
++    case 3: return startWork(env, a0);
++    case 4: return doneWork(a0);
++    default: return -1;
++    }
++}
++
++/* return pointer to static buf filled with strz from ptr[0..maxlen] */
++static const char *
++peekStrZ(CPUArchState *env, target_ulong ptr, int maxlen)
++{
++    static char buf[0x1000];
++    int i;
++    if(maxlen > sizeof buf - 1)
++        maxlen = sizeof buf - 1;
++    for(i = 0; i < maxlen; i++) {
++        char ch = cpu_ldub_data(env, ptr + i);
++        if(!ch)
++            break;
++        buf[i] = ch;
++    }
++    buf[i] = 0;
++    return buf;
++}
++
++void helper_aflInterceptLog(CPUArchState *env)
++{
++    if(!aflStart)
++        return;
++    aflGotLog = 1;
++
++    static FILE *fp = NULL;
++    if(fp == NULL) {
++        fp = fopen("logstore.txt", "a");
++        if(fp) {
++            struct timeval tv;
++            gettimeofday(&tv, NULL);
++            fprintf(fp, "\n----\npid %d time %ld.%06ld\n", getpid(), (u_long)tv.tv_sec, (u_long)tv.tv_usec);
++        }
++    }
++    if(!fp) 
++        return;
++
++    target_ulong stack = env->regs[R_ESP];
++    //target_ulong level = env->regs[R_ESI]; // arg 2
++    target_ulong ptext = cpu_ldq_data(env, stack + 0x8); // arg7
++    target_ulong len   = cpu_ldq_data(env, stack + 0x10) & 0xffff; // arg8
++    const char *msg = peekStrZ(env, ptext, len);
++    fprintf(fp, "%s\n", msg);
++}
++
++void helper_aflInterceptPanic(void)
++{
++    if(!aflStart)
++        return;
++    exit(32);
++}
++
++void gen_aflBBlock(target_ulong pc)
++{
++    if(pc == aflPanicAddr)
++        gen_helper_aflInterceptPanic();
++    if(pc == aflDmesgAddr)
++        gen_helper_aflInterceptLog(cpu_env);
++}
+\ No newline at end of file
+diff --git a/qemu_mode/qemu-8.2.0/accel/tcg/cpu-exec.c b/qemu_mode/qemu-8.2.0/accel/tcg/cpu-exec.c
+index 02c9b1a68..2bd4ed94d 100644
+--- a/qemu_mode/qemu-8.2.0/accel/tcg/cpu-exec.c
++++ b/qemu_mode/qemu-8.2.0/accel/tcg/cpu-exec.c
+@@ -453,7 +453,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
+     TranslationBlock *last_tb;
+     const void *tb_ptr = itb->tc.ptr;
+ 
+-    AFL_QEMU_CPU_SNIPPET2;
++    AFL_QEMU_CPU_SNIPPET2(env, itb->pc);
+ 
+     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
+         log_cpu_exec(log_pc(cpu, itb), cpu, itb);
+@@ -509,6 +509,8 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
+         cpu->exception_index = EXCP_DEBUG;
+         cpu_loop_exit(cpu);
+     }
++    if(afl_wants_cpu_to_stop)
++        cpu->exit_request = 1;
+ 
+     return last_tb;
+ }
+@@ -1038,11 +1040,15 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
+                 last_tb = NULL;
+             }
+ #endif
++/*
++ * chaining complicates AFL's instrumentation so we disable it
++ */
++#ifdef NOPE_NOT_NEVER
+             /* See if we can patch the calling TB. */
+             if (last_tb) {
+                 tb_add_jump(last_tb, tb_exit, tb);
+             }
+-
++#endif
+             cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit);
+ 
+             /* Try to align the host and virtual clocks
+diff --git a/qemu_mode/qemu-8.2.0/accel/tcg/translator.c b/qemu_mode/qemu-8.2.0/accel/tcg/translator.c
+index 38c34009a..aa3d09afc 100644
+--- a/qemu_mode/qemu-8.2.0/accel/tcg/translator.c
++++ b/qemu_mode/qemu-8.2.0/accel/tcg/translator.c
+@@ -15,6 +15,7 @@
+ #include "exec/plugin-gen.h"
+ #include "tcg/tcg-op-common.h"
+ #include "internal-target.h"
++#include "../patches/aflCall.h"
+ 
+ static void set_can_do_io(DisasContextBase *db, bool val)
+ {
+@@ -136,6 +137,7 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
+     db->pc_first = pc;
+     db->pc_next = pc;
+     db->is_jmp = DISAS_NEXT;
++    gen_aflBBlock(pc);
+     db->num_insns = 0;
+     db->max_insns = *max_insns;
+     db->singlestep_enabled = cflags & CF_SINGLE_STEP;
+@@ -373,4 +375,4 @@ uint64_t translator_ldq(CPUArchState *env, DisasContextBase *db, abi_ptr pc)
+ void translator_fake_ldb(uint8_t insn8, abi_ptr pc)
+ {
+     plugin_insn_append(pc, &insn8, sizeof(insn8));
+-}
++}
+\ No newline at end of file
+diff --git a/qemu_mode/qemu-8.2.0/block/meson.build b/qemu_mode/qemu-8.2.0/block/meson.build
+index 59ff6d380..e76218f9a 100644
+--- a/qemu_mode/qemu-8.2.0/block/meson.build
++++ b/qemu_mode/qemu-8.2.0/block/meson.build
+@@ -21,6 +21,7 @@ block_ss.add(files(
+   'mirror.c',
+   'nbd.c',
+   'null.c',
++  'privmem.c',
+   'preallocate.c',
+   'progress_meter.c',
+   'qapi.c',
+diff --git a/qemu_mode/qemu-8.2.0/block/privmem.c b/qemu_mode/qemu-8.2.0/block/privmem.c
+new file mode 100644
+index 000000000..6e72e45ea
+--- /dev/null
++++ b/qemu_mode/qemu-8.2.0/block/privmem.c
+@@ -0,0 +1,148 @@
++/*
++ * non-persistent / private memory block driver, COW on fork
++ *
++ * Authors:
++ *  Ryan Hileman <lunixbochs@gmail.com>
++ *
++ * Copyright (C) 2016 Ryan Hileman
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#include <sys/mman.h>
++
++#include "block/block_int.h"
++
++typedef struct {
++    int fd;
++    char *buf;
++    size_t size;
++} BDRVCOWState;
++
++static QemuOptsList runtime_opts = {
++    .name = "privmem",
++    .head = QTAILQ_HEAD_INITIALIZER(runtime_opts.head),
++    .desc = {
++        {
++            .name = "filename",
++            .type = QEMU_OPT_STRING,
++            .help = "",
++        },
++        { /* end of list */ }
++    },
++};
++
++static int privmem_file_open(BlockDriverState *bs, QDict *options, int flags,
++                          Error **errp)
++{
++    QemuOpts *opts;
++    BDRVCOWState *s = bs->opaque;
++    const char *filename, *p;
++    struct stat sb;
++    int ret = 0;
++
++    opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
++    qemu_opts_absorb_qdict(opts, options, &error_abort);
++    filename = qemu_opt_get(opts, "filename");
++    if (error_abort) {
++        error_propagate(errp, error_abort);
++        ret = -EINVAL;
++        goto fail;
++    }
++
++    /* strip "privmem:". XXX whats the proper way to handle this? */
++    p = strchr(filename, ':');
++    if(p)
++        filename = p + 1;
++
++    s->fd = qemu_open(filename, O_RDONLY);
++    if (fstat(s->fd, &sb) == -1 || !S_ISREG(sb.st_mode)) {
++        perror(filename);
++        ret = -EINVAL;
++        goto fail;
++    }
++    s->size = sb.st_size;
++    s->buf = mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, s->fd, 0);
++    if (s->buf == MAP_FAILED) {
++        perror("mmap");
++        ret = -EINVAL;
++        goto fail;
++    }
++
++fail:
++    qemu_opts_del(opts);
++    return ret;
++}
++
++static void privmem_close(BlockDriverState *bs)
++{
++    BDRVCOWState *s = bs->opaque;
++    munmap(s->buf, s->size);
++    close(s->fd);
++}
++
++static int64_t privmem_getlength(BlockDriverState *bs)
++{
++    BDRVCOWState *s = bs->opaque;
++    return s->size;
++}
++
++static coroutine_fn int privmem_read(BlockDriverState *bs,
++                                    int64_t sector_num, uint8_t *buf, int nb_sectors)
++{
++    BDRVCOWState *s = bs->opaque;
++    int64_t i, bufoff, imgoff, dist;
++    for (i = 0; i < nb_sectors; i++) {
++        imgoff = (sector_num + i) * 0x200;
++        bufoff = i * 0x200;
++        if (imgoff >= s->size - 0x200) {
++            dist = s->size - imgoff;
++            memcpy(buf + bufoff, s->buf + imgoff, dist);
++            memset(buf + bufoff + dist, 0, 0x200 - dist);
++        } else if (imgoff >= s->size) {
++            memset(buf + bufoff, 0, 0x200);
++        } else {
++            memcpy(buf + bufoff, s->buf + imgoff, 0x200);
++        }
++    }
++    return 0;
++}
++
++static coroutine_fn int privmem_write(BlockDriverState *bs,
++                                      int64_t sector_num, const uint8_t *buf, int nb_sectors)
++{
++    BDRVCOWState *s = bs->opaque;
++    int64_t i, bufoff, imgoff, dist;
++    for (i = 0; i < nb_sectors; i++) {
++        imgoff = (sector_num + i) * 0x200;
++        bufoff = i * 0x200;
++        if (imgoff >= s->size - 0x200) {
++            dist = s->size - imgoff;
++            memcpy(s->buf + imgoff, buf + bufoff, dist);
++        } else if (imgoff < s->size) {
++            memcpy(s->buf + imgoff, buf + bufoff, 0x200);
++        }
++    }
++    return 0;
++}
++
++static BlockDriver bdrv_privmem = {
++    .format_name            = "privmem",
++    .protocol_name          = "privmem",
++    .instance_size          = sizeof(BDRVCOWState),
++
++    .bdrv_file_open         = privmem_file_open,
++    .bdrv_close             = privmem_close,
++    .bdrv_getlength         = privmem_getlength,
++
++    .bdrv_read              = privmem_read,
++    .bdrv_write             = privmem_write,
++};
++
++static void bdrv_privmem_init(void)
++{
++    bdrv_register(&bdrv_privmem);
++}
++
++block_init(bdrv_privmem_init);
+diff --git a/qemu_mode/qemu-8.2.0/hw/arm/boot.c b/qemu_mode/qemu-8.2.0/hw/arm/boot.c
+index 84ea6a807..77736e5c3 100644
+--- a/qemu_mode/qemu-8.2.0/hw/arm/boot.c
++++ b/qemu_mode/qemu-8.2.0/hw/arm/boot.c
+@@ -953,6 +953,26 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
+     kernel_size = arm_load_elf(info, &elf_entry, &image_low_addr,
+                                &image_high_addr, elf_machine, as);
+     if (kernel_size > 0 && have_dtb(info)) {
++        if (info->initrd_filename) {
++            initrd_size = load_ramdisk(info->initrd_filename,
++                                       info->initrd_start,
++                                       info->ram_size -
++                                       info->initrd_start);
++            if (initrd_size < 0) {
++                initrd_size = load_image_targphys(info->initrd_filename,
++                                                  info->initrd_start,
++                                                  info->ram_size -
++                                                  info->initrd_start);
++            }
++            if (initrd_size < 0) {
++                fprintf(stderr, "qemu: could not load initrd '%s'\n",
++                        info->initrd_filename);
++                exit(1);
++            }
++        } else {
++            initrd_size = 0;
++        }
++        info->initrd_size = initrd_size;
+         /*
+          * If there is still some room left at the base of RAM, try and put
+          * the DTB there like we do for images loaded with -bios or -pflash.
+diff --git a/qemu_mode/qemu-8.2.0/qemu-options.hx b/qemu_mode/qemu-8.2.0/qemu-options.hx
+index 42fd09e4d..8ba116ac4 100644
+--- a/qemu_mode/qemu-8.2.0/qemu-options.hx
++++ b/qemu_mode/qemu-8.2.0/qemu-options.hx
+@@ -4106,6 +4106,13 @@ SRST
+     from ./my\_blob.bin.
+ ERST
+ 
++DEF("aflFile", HAS_ARG, QEMU_OPTION_aflFile, \
++    "-aflFile fname  AFL input sourced from fname\n", QEMU_ARCH_ALL)
++DEF("aflPanicAddr", HAS_ARG, QEMU_OPTION_aflPanicAddr, \
++    "-aflPanicAddr hexaddr  Address of OS panic function\n", QEMU_ARCH_ALL)
++DEF("aflDmesgAddr", HAS_ARG, QEMU_OPTION_aflDmesgAddr, \
++    "-aflDmesgAddr hexaddr  Address of OS logging function\n", QEMU_ARCH_ALL)
++
+ DEF("serial", HAS_ARG, QEMU_OPTION_serial, \
+     "-serial dev     redirect the serial port to char device 'dev'\n",
+     QEMU_ARCH_ALL)
+diff --git a/qemu_mode/qemu-8.2.0/system/cpus.c b/qemu_mode/qemu-8.2.0/system/cpus.c
+index a444a747f..9dead3b2f 100644
+--- a/qemu_mode/qemu-8.2.0/system/cpus.c
++++ b/qemu_mode/qemu-8.2.0/system/cpus.c
+@@ -46,6 +46,7 @@
+ #include "hw/boards.h"
+ #include "hw/hw.h"
+ #include "trace.h"
++#include "../patches/afl.h"
+ 
+ #ifdef CONFIG_LINUX
+ 
+@@ -72,6 +73,9 @@ static QemuMutex qemu_global_mutex;
+  */
+ static const AccelOpsClass *cpus_accel;
+ 
++static int afl_qemuloop_pipe[2];        /* to notify mainloop to become forkserver */
++static CPUState *restart_cpu = NULL;    /* cpu to restart */
++
+ bool cpu_is_stopped(CPUState *cpu)
+ {
+     return cpu->stopped || !runstate_is_running();
+@@ -412,8 +416,19 @@ static void qemu_cpu_stop(CPUState *cpu, bool exit)
+ 
+ void qemu_wait_io_event_common(CPUState *cpu)
+ {
++    if(afl_wants_cpu_to_stop) {
++        /* tell iothread to run AFL forkserver */
++        afl_wants_cpu_to_stop = 0;
++        if(write(afl_qemuloop_pipe[1], "FORK", 4) != 4)
++            perror("write afl_qemuloop_pip");
++        afl_qemuloop_pipe[1] = -1;
++
++        restart_cpu = first_cpu;
++        first_cpu = NULL;
++        cpu_disable_ticks();
++    }
+     qatomic_set_mb(&cpu->thread_kicked, false);
+-    if (cpu->stop) {
++    if (cpu->stop || afl_wants_cpu_to_stop) {
+         qemu_cpu_stop(cpu, false);
+     }
+     process_queued_cpu_work(cpu);
+@@ -627,8 +642,41 @@ const AccelOpsClass *cpus_get_accel(void)
+     return cpus_accel;
+ }
+ 
++static void
++gotPipeNotification(void *ctx)
++{
++    CPUArchState *env;
++    char buf[4];
++
++    /* cpu thread asked us to run AFL forkserver */
++    if(read(afl_qemuloop_pipe[0], buf, 4) != 4) {
++        printf("error reading afl/qemu pipe!\n");
++        exit(1);
++    }
++
++    printf("start up afl forkserver!\n");
++    afl_setup();
++    env = NULL; //XXX for now.. if we want to share JIT to the parent we will need to pass in a real env here
++    //env = restart_cpu->env_ptr;
++    afl_forkserver(env);
++
++    /* we're now in the child! */
++    first_cpu = restart_cpu;
++    if(aflEnableTicks) // re-enable ticks only if asked to
++        cpu_enable_ticks();
++    qemu_init_vcpu(restart_cpu);
++
++    /* continue running iothread in child process... */
++}
++
+ void qemu_init_vcpu(CPUState *cpu)
+ {
++    if(pipe(afl_qemuloop_pipe) == -1) {
++        perror("qemuloop pipe");
++        exit(1);
++    }
++    qemu_set_fd_handler(afl_qemuloop_pipe[0], gotPipeNotification, NULL, NULL);
++
+     MachineState *ms = MACHINE(qdev_get_machine());
+ 
+     cpu->nr_cores = machine_topo_get_cores_per_socket(ms);
+diff --git a/qemu_mode/qemu-8.2.0/system/physmem.c b/qemu_mode/qemu-8.2.0/system/physmem.c
+index a63853a7b..ff94a7e83 100644
+--- a/qemu_mode/qemu-8.2.0/system/physmem.c
++++ b/qemu_mode/qemu-8.2.0/system/physmem.c
+@@ -1883,8 +1883,10 @@ static void ram_block_add(RAMBlock *new_block, Error **errp)
+          * KVM is not used and it may be forked (eg for fuzzing purposes).
+          */
+         if (!qtest_enabled()) {
++            /* Keep translated memory blocks across forks for AFL!
+             qemu_madvise(new_block->host, new_block->max_length,
+                          QEMU_MADV_DONTFORK);
++            */
+         }
+         ram_block_notify_add(new_block->host, new_block->used_length,
+                              new_block->max_length);
+diff --git a/qemu_mode/qemu-8.2.0/system/vl.c b/qemu_mode/qemu-8.2.0/system/vl.c
+index 2bcd9efb9..3fa5f8a71 100644
+--- a/qemu_mode/qemu-8.2.0/system/vl.c
++++ b/qemu_mode/qemu-8.2.0/system/vl.c
+@@ -2898,6 +2898,15 @@ void qemu_init(int argc, char **argv)
+                     exit(1);
+                 }
+                 break;
++            case QEMU_OPTION_aflFile:
++                aflFile = (char *)optarg;
++                break;
++            case QEMU_OPTION_aflPanicAddr:
++                aflPanicAddr = strtoul(optarg, NULL, 16);
++                break;
++            case QEMU_OPTION_aflDmesgAddr:
++                aflDmesgAddr = strtoul(optarg, NULL, 16);
++                break;
+             case QEMU_OPTION_kernel:
+                 qdict_put_str(machine_opts_dict, "kernel", optarg);
+                 break;
+diff --git a/qemu_mode/qemu-8.2.0/target/arm/helper.h b/qemu_mode/qemu-8.2.0/target/arm/helper.h
+index 2b0273330..e276f2e74 100644
+--- a/qemu_mode/qemu-8.2.0/target/arm/helper.h
++++ b/qemu_mode/qemu-8.2.0/target/arm/helper.h
+@@ -1,3 +1,8 @@
++DEF_HELPER_0(aflInterceptPanic, void)
++DEF_HELPER_1(aflInterceptLog, void, env)
++DEF_HELPER_4(aflCall32, i32, env, i32, i32, i32)
++DEF_HELPER_4(aflCall, tl, env, tl, tl, tl)
++
+ DEF_HELPER_FLAGS_1(sxtb16, TCG_CALL_NO_RWG_SE, i32, i32)
+ DEF_HELPER_FLAGS_1(uxtb16, TCG_CALL_NO_RWG_SE, i32, i32)
+ 
+diff --git a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
+index a2e49c39f..a56926705 100644
+--- a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
++++ b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
+@@ -2344,8 +2344,20 @@ static bool trans_SVC(DisasContext *s, arg_i *a)
+         gen_exception_insn_el(s, 0, EXCP_UDEF, syndrome, 2);
+         return true;
+     }
+-    gen_ss_advance(s);
+-    gen_exception_insn(s, 4, EXCP_SWI, syndrome);
++    
++    if(a->imm == 0xfa32) { // 0xd41f4641
++        TCGv_i64 tmp = read_cpu_reg_sp(s, 0, 1);
++        TCGv_i64 tmp2 = read_cpu_reg_sp(s, 1, 1);
++        TCGv_i64 tmp3 = read_cpu_reg_sp(s, 2, 1);
++        gen_helper_aflCall(tmp, tcg_env, tmp, tmp2, tmp3);
++        tcg_gen_mov_i64(cpu_reg(s, 0), tmp);
++        tcg_temp_free_i64(tmp3);
++        tcg_temp_free_i64(tmp2);
++        tcg_temp_free_i64(tmp);
++    } else {
++        gen_ss_advance(s);
++        gen_exception_insn(s, 4, EXCP_SWI, syndrome);
++    }
+     return true;
+ }
+ 
+diff --git a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
+index b3660173d..a2e468144 100644
+--- a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
++++ b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
+@@ -8562,9 +8562,20 @@ static bool trans_SVC(DisasContext *s, arg_SVC *a)
+             uint32_t syndrome = syn_aa32_svc(a->imm, s->thumb);
+             gen_exception_insn_el(s, 0, EXCP_UDEF, syndrome, 2);
+         } else {
+-            gen_update_pc(s, curr_insn_len(s));
+-            s->svc_imm = a->imm;
+-            s->base.is_jmp = DISAS_SWI;
++            target_ulong svc_imm = extract32(s->insn, 0, 24);
++            if(svc_imm == 0x4c4641) {
++                TCGv_i32 tmp = load_reg(s, 0);
++                TCGv_i32 tmp2 = load_reg(s, 1);
++                TCGv_i32 tmp3 = load_reg(s, 2);
++                gen_helper_aflCall32(tmp, tcg_env, tmp, tmp2, tmp3);
++                tcg_temp_free_i32(tmp3);
++                tcg_temp_free_i32(tmp2);
++                store_reg(s, 0, tmp);
++            } else {
++                gen_update_pc(s, curr_insn_len(s));
++                s->svc_imm = a->imm;
++                s->base.is_jmp = DISAS_SWI;
++            }
+         }
+     }
+     return true;
+diff --git a/qemu_mode/qemu-8.2.0/target/i386/helper.h b/qemu_mode/qemu-8.2.0/target/i386/helper.h
+index ac2b04abd..d9cf30be0 100644
+--- a/qemu_mode/qemu-8.2.0/target/i386/helper.h
++++ b/qemu_mode/qemu-8.2.0/target/i386/helper.h
+@@ -1,3 +1,6 @@
++DEF_HELPER_0(aflInterceptPanic, void)
++DEF_HELPER_1(aflInterceptLog, void, env)
++DEF_HELPER_4(aflCall, tl, env, tl, tl, tl)
+ DEF_HELPER_FLAGS_4(cc_compute_all, TCG_CALL_NO_RWG_SE, tl, tl, tl, tl, int)
+ DEF_HELPER_FLAGS_4(cc_compute_c, TCG_CALL_NO_RWG_SE, tl, tl, tl, tl, int)
+ 
+diff --git a/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c b/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
+index 037bc47e7..42e9ff3c2 100644
+--- a/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
++++ b/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
+@@ -5694,6 +5694,9 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
+             s->base.is_jmp = DISAS_EOB_ONLY;
+         }
+         break;
++    case 0x124: /* pseudo-instr: 0x0f 0x24 - AFL call */
++        gen_helper_aflCall(cpu_regs[R_EAX], cpu_env, cpu_regs[R_EDI], cpu_regs[R_ESI], cpu_regs[R_EDX]);
++        break;
+     case 0x105: /* syscall */
+         /* For Intel SYSCALL is only valid in long mode */
+         if (!LMA(s) && env->cpuid_vendor1 == CPUID_VENDOR_INTEL_1) {

@@ -1,0 +1,14 @@
+# KERN = "/home/czx/TriforceLinuxSyscallFuzzer/kern"
+./afl-fuzz -m none -M m0 -t 500+ \
+    -i /home/czx/TriforceLinuxSyscallFuzzer/inputs \
+    -o /home/czx/TriforceLinuxSyscallFuzzer/outputs_new \
+    -QQ -- \
+    qemu_mode/qemu-8.2.0/build/qemu-system-x86_64 \
+    -L qemu_mode/qemu-8.2.0/pc-bios \
+    -kernel /home/czx/TriforceLinuxSyscallFuzzer/kern/bzImage \
+    -initrd /home/czx/TriforceLinuxSyscallFuzzer/fuzzRoot.cpio.gz \
+    -m 2048M -nographic -append "console=ttyS0" \
+    -aflPanicAddr "ffffffff8118c634" \
+    -aflDmesgAddr "ffffffff810d7200" \
+    -aflFile @@ \
+    -D qemu_mode/qemu_log.txt

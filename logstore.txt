@@ -1,0 +1,132 @@
+
+----
+pid 239263 time 1708523161.537069
+traps: driver[103] general protection ip:41163e sp:7ffeb2c797a8 error:0 in driver[401000+9c000]
+
+----
+pid 239263 time 1708523161.537039
+traps: driver[103] general protection ip:41163e sp:7ffeb2c797a8 error:0 in driver[401000+9c000]
+
+----
+pid 239469 time 1708523168.610885
+hrtimer: interrupt took 11927361 ns
+
+----
+pid 239520 time 1708523169.598333
+hrtimer: interrupt took 11883180 ns
+
+----
+pid 239564 time 1708523170.887417
+hrtimer: interrupt took 12307232 ns
+
+----
+pid 243875 time 1708523634.396688
+hrtimer: interrupt took 10991011 ns
+
+----
+pid 243937 time 1708523636.921828
+hrtimer: interrupt took 16563859 ns
+
+----
+pid 287922 time 1708527344.344728
+hrtimer: interrupt took 12721638 ns
+
+----
+pid 288093 time 1708527350.535754
+hrtimer: interrupt took 12029208 ns
+
+----
+pid 288121 time 1708527351.688557
+hrtimer: interrupt took 11583533 ns
+
+----
+pid 288264 time 1708527356.982099
+hrtimer: interrupt took 16079335 ns
+
+----
+pid 309045 time 1708528963.442888
+hrtimer: interrupt took 32226490 ns
+
+----
+pid 309054 time 1708528963.937276
+hrtimer: interrupt took 22462600 ns
+
+----
+pid 310300 time 1708528986.977812
+hrtimer: interrupt took 24461700 ns
+
+----
+pid 310714 time 1708528994.578481
+hrtimer: interrupt took 52671400 ns
+
+----
+pid 324123 time 1708529890.972859
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324125 time 1708529891.119844
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324127 time 1708529891.272081
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324129 time 1708529891.485221
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324131 time 1708529891.704951
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324133 time 1708529891.914646
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324135 time 1708529892.098216
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324137 time 1708529892.333592
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 324139 time 1708529892.596549
+driver[103] bad frame in rt_sigreturn frame:00007fffff198480 ip:7fffff198fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332514 time 1708530185.764329
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332516 time 1708530185.899904
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332524 time 1708530186.055413
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332526 time 1708530186.245050
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332528 time 1708530186.463523
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332533 time 1708530186.664127
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332538 time 1708530186.808465
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332540 time 1708530186.979842
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff
+
+----
+pid 332548 time 1708530187.136870
+driver[103] bad frame in rt_sigreturn frame:00007ffd07fc2170 ip:7ffd07fc2fc0 sp:0 orax:ffffffffffffffff

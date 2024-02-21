@@ -1,0 +1,62 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "QEMU Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/qemu_mode/qemu-8.2.0/build/qemu-system-x86_64", // 修改为QEMU可执行文件的路径
+            "args": ["-L", "qemu_mode/qemu-8.2.0/pc-bios",
+                     "-kernel", "/home/czx/TriforceLinuxSyscallFuzzer/kern/bzImage",
+                     "-initrd", "/home/czx/TriforceLinuxSyscallFuzzer/fuzzRoot.cpio.gz",
+                     "-m", "64M", "-nographic", "-append", "console=ttyS0",
+                     "-aflFile", "@@",
+                     "-D", "qemu_mode/qemu_log.txt"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb", // 如果GDB可执行文件不在系统路径中，请指定GDB的完整路径
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "AFL-Fuzz Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/afl-fuzz", // 修改为QEMU可执行文件的路径
+            "args": ["-m", "none", "-M", "M0", "-t", "500+",
+                     "-i", "/home/czx/TriforceLinuxSyscallFuzzer/inputs",
+                     "-o", "/home/czx/TriforceLinuxSyscallFuzzer/outputs_new",
+                     "-QQ", "--",
+                     "qemu_mode/qemu-8.2.0/build/qemu-system-x86_64",
+                     "-L", "/home/czx/MordernTriforceAFL/qemu_mode/qemu-8.2.0/pc-bios",
+                     "-kernel", "/home/czx/TriforceLinuxSyscallFuzzer/kern/bzImage",
+                     "-initrd", "/home/czx/TriforceLinuxSyscallFuzzer/fuzzRoot.cpio.gz",
+                     "-m", "64M", "-nographic", "-append", "console=ttyS0",
+                     "-D", "qemu_mode/qemu_log.txt",
+                     "-aflPanicAddr", "ffffffff8118c634",
+                     "-aflDmesgAddr", "ffffffff810d7200",
+                     "-aflFile", "@@"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb", // 如果GDB可执行文件不在系统路径中，请指定GDB的完整路径
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

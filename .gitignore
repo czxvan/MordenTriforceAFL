@@ -1,0 +1,31 @@
+# Binaries produced by "make".
+afl-analyze
+afl-as
+afl-clang
+afl-clang++
+afl-fuzz
+afl-g++
+afl-gcc
+afl-gotcpu
+afl-showmap
+afl-tmin
+as
+
+# Binaries produced by "make -C llvm_mode"
+afl-clang-fast
+afl-clang-fast++
+afl-llvm-pass.so
+afl-llvm-rt-32.o
+afl-llvm-rt-64.o
+afl-llvm-rt.o
+
+# qemu mode binaries, seeds abd output.
+afl-qemu-system-trace
+afl-qemu-trace
+test-instr-gcc
+test-no-instr
+seeds
+out
+
+# log files
+qemu_mode/qemu_log.txt
