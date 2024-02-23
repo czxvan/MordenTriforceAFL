@@ -7725,6 +7725,8 @@ static char** get_qemu_argv(int qemu_mode, u8* own_loc, char** argv, int argc) {
 
     if(qemu_mode == 1)
       cp = alloc_printf("%s/afl-qemu-trace", own_copy);
+    else if(qemu_mode == 2)
+      cp = alloc_printf("%s", argv[0]);
     else
       cp = alloc_printf("%s/%s", own_copy, argv[0]);
 
@@ -8083,6 +8085,8 @@ int main(int argc, char** argv) {
   if (!out_file) setup_stdio_file();
 
   check_binary(argv[optind]);
+  SAYF("argv[optind] = %s\n", argv[optind]);
+
 
   start_time = get_cur_time();
 

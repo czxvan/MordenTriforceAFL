@@ -158,7 +158,7 @@ echo "[+] Build process successful!"
 echo "[*] Copying binary..."
 
 cp -f "build/${CPU_TARGET}-linux-user/qemu-${CPU_TARGET}" "../../afl-qemu-trace" || exit 1
-cp -f "build/${CPU_TARGET}-softmmu/qemu-system-${CPU_TARGET}" "../../afl-system-qemu-trace" || exit 1
+cp -f "build/${CPU_TARGET}-softmmu/qemu-system-${CPU_TARGET}" "../../afl-qemu-system-trace" || exit 1
 
 cd ..
 ls -l ../afl-qemu-trace || exit 1
