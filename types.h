@@ -88,7 +88,9 @@ typedef int64_t  s64;
 #define MEM_BARRIER() \
   __asm__ volatile("" ::: "memory")
 
-#define likely(_x)   __builtin_expect(!!(_x), 1)
-#define unlikely(_x)  __builtin_expect(!!(_x), 0)
+#ifndef IN_QEMU
+#  define likely(_x)   __builtin_expect(!!(_x), 1)
+#  define unlikely(_x)  __builtin_expect(!!(_x), 0)
+#endif
 
 #endif /* ! _HAVE_TYPES_H */

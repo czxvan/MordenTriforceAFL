@@ -2057,7 +2057,7 @@ EXP_ST void init_forkserver(char** argv) {
 
     r.rlim_max = r.rlim_cur = 0;
 
-    setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
+    // setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
 
     /* Isolate the process and configure standard descriptors. If out_file is
        specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
@@ -2338,7 +2338,7 @@ static u8 run_target(char** argv, u32 timeout) {
 
       r.rlim_max = r.rlim_cur = 0;
 
-      setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
+      // setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
 
       /* Isolate the process and configure standard descriptors. If out_file is
          specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
@@ -2438,6 +2438,8 @@ static u8 run_target(char** argv, u32 timeout) {
 
   }
 
+  // ACTF("child_pid(%d)'s count_bytes(trace_bits) = : %d\n", child_pid, count_bytes(trace_bits));
+
   if (!WIFSTOPPED(status)) child_pid = 0;
 
   getitimer(ITIMER_REAL, &it);
@@ -2484,6 +2486,11 @@ static u8 run_target(char** argv, u32 timeout) {
 
   if (uses_asan && WEXITSTATUS(status) == MSAN_ERROR) {
     kill_signal = 0;
+    return FAULT_CRASH;
+  }
+
+  /* treat all non-zero return values from qemu system test as a crash */
+  if(qemu_mode > 1 && WEXITSTATUS(status) != 0) {
     return FAULT_CRASH;
   }
 
@@ -6924,7 +6931,8 @@ EXP_ST void check_binary(u8* fname) {
 
   }
 
-  if (getenv("AFL_SKIP_BIN_CHECK")) return;
+  // if (getenv("AFL_SKIP_BIN_CHECK")) return;
+  if (qemu_mode > 1 || getenv("AFL_SKIP_BIN_CHECK")) return;
 
   /* Check for blatant user errors. */
 
@@ -7672,7 +7680,7 @@ EXP_ST void setup_signal_handlers(void) {
 
 /* Rewrite argv for QEMU. */
 
-static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
+static char** get_qemu_argv(int qemu_mode, u8* own_loc, char** argv, int argc) {
 
   char** new_argv = ck_alloc(sizeof(char*) * (argc + 4));
   u8 *tmp, *cp, *rsl, *own_copy;
@@ -7681,18 +7689,24 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 
   setenv("QEMU_LOG", "nochain", 1);
 
-  memcpy(new_argv + 3, argv + 1, sizeof(char*) * argc);
+  if(qemu_mode == 1) {
+    memcpy(new_argv + 3, argv + 1, sizeof(char*) * argc);
 
-  new_argv[2] = target_path;
-  new_argv[1] = "--";
-
+    new_argv[2] = target_path;
+    new_argv[1] = "--";
+  } else {
+    memcpy(new_argv + 1, argv + 1, sizeof(char*) * argc);
+  }
   /* Now we need to actually find the QEMU binary to put in argv[0]. */
 
   tmp = getenv("AFL_PATH");
 
   if (tmp) {
 
-    cp = alloc_printf("%s/afl-qemu-trace", tmp);
+    if(qemu_mode == 1)
+      cp = alloc_printf("%s/afl-qemu-trace", tmp);
+    else
+      cp = alloc_printf("%s/%s", tmp, argv[0]);
 
     if (access(cp, X_OK))
       FATAL("Unable to find '%s'", tmp);
@@ -7709,7 +7723,11 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 
     *rsl = 0;
 
-    cp = alloc_printf("%s/afl-qemu-trace", own_copy);
+    if(qemu_mode == 1)
+      cp = alloc_printf("%s/afl-qemu-trace", own_copy);
+    else
+      cp = alloc_printf("%s/%s", own_copy, argv[0]);
+
     ck_free(own_copy);
 
     if (!access(cp, X_OK)) {
@@ -7721,11 +7739,17 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 
   } else ck_free(own_copy);
 
-  if (!access(BIN_PATH "/afl-qemu-trace", X_OK)) {
+  if (qemu_mode == 1 && !access(BIN_PATH "/afl-qemu-trace", X_OK)) {
 
     target_path = new_argv[0] = ck_strdup(BIN_PATH "/afl-qemu-trace");
     return new_argv;
+  }
 
+  cp = alloc_printf("%s/%s", BIN_PATH, argv[0]);
+  if (qemu_mode > 1 && !access(cp, X_OK)) {
+
+    target_path = new_argv[0] = cp;
+    return new_argv;
   }
 
   SAYF("\n" cLRD "[-] " cRST
@@ -7968,8 +7992,8 @@ int main(int argc, char** argv) {
 
       case 'Q': /* QEMU mode */
 
-        if (qemu_mode) FATAL("Multiple -Q options not supported");
-        qemu_mode = 1;
+        if (qemu_mode > 2) FATAL("More than two -Q options not supported");
+        qemu_mode += 1;
 
         if (!mem_limit_given) mem_limit = MEM_LIMIT_QEMU;
 
@@ -8063,7 +8087,7 @@ int main(int argc, char** argv) {
   start_time = get_cur_time();
 
   if (qemu_mode)
-    use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
+    use_argv = get_qemu_argv(qemu_mode, argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
 

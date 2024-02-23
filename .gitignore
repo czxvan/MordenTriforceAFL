@@ -18,3 +18,18 @@ afl-llvm-pass.so
 afl-llvm-rt-32.o
 afl-llvm-rt-64.o
 afl-llvm-rt.o
+
+# qemu mode binaries, seeds abd output.
+afl-qemu-system-trace
+afl-qemu-trace
+test-instr-gcc
+test-no-instr
+seeds
+out
+
+# log files
+qemu_mode/qemu_log.txt
+
+# qemu
+qemu-8.2.0.tar.xz
+qemu_mode/qemu-8.2.0/*
