@@ -47,7 +47,7 @@ if [ ! "`uname -s`" = "Linux" ]; then
 
 fi
 
-if [ ! -f "patches/afl-qemu-cpu-inl-q8.h" -o ! -f "../config.h" ]; then
+if [ ! -f "patches/afl-qemu-cpu-inl.h" -o ! -f "../config.h" ]; then
 
   echo "[-] Error: key files not found - wrong working directory?"
   exit 1
@@ -134,18 +134,18 @@ cd qemu-$VERSION || exit 1
 
 echo "[*] Applying patches..."
 
-patch -p1 <../patches/elfload-q8.diff || exit 1
-patch -p1 <../patches/cpu-exec-q8.diff || exit 1
-patch -p1 <../patches/syscall-q8.diff || exit 1
+for diff_file in ../patches/tripatches/*.diff; do
+  patch -p3 < $diff_file
+done
 
 echo "[+] Patching done."
 
 # --enable-pie seems to give a couple of exec's a second performance
 # improvement, much to my surprise. Not sure how universal this is..
 
-CFLAGS="-O3 -ggdb" ./configure --disable-system \
+CFLAGS="-O3 -ggdb" ./configure --enable-system \
   --enable-linux-user --disable-gtk --disable-sdl --disable-vnc \
-  --target-list="${CPU_TARGET}-linux-user" --enable-pie --enable-kvm || exit 1
+  --target-list="${CPU_TARGET}-linux-user ${CPU_TARGET}-softmmu" --enable-pie --enable-kvm || exit 1
 
 echo "[+] Configuration complete."
 
@@ -158,11 +158,13 @@ echo "[+] Build process successful!"
 echo "[*] Copying binary..."
 
 cp -f "build/${CPU_TARGET}-linux-user/qemu-${CPU_TARGET}" "../../afl-qemu-trace" || exit 1
+cp -f "build/${CPU_TARGET}-softmmu/qemu-system-${CPU_TARGET}" "../../afl-system-qemu-trace" || exit 1
 
 cd ..
 ls -l ../afl-qemu-trace || exit 1
+ls -l ../afl-qemu-system-trace || exit 1
 
-echo "[+] Successfully created '../afl-qemu-trace'."
+echo "[+] Successfully created '../afl-qemu-trace' and '../afl-qemu-system-trace'."
 
 if [ "$ORIG_CPU_TARGET" = "" ]; then
 
@@ -201,7 +203,7 @@ if [ "$ORIG_CPU_TARGET" = "" ]; then
 else
 
   echo "[!] Note: can't test instrumentation when CPU_TARGET set."
-  echo "[+] All set, you can now (hopefully) use the -Q mode in afl-fuzz!"
+  echo "[+] All set, you can now (hopefully) use the -Q and -QQ mode in afl-fuzz!"
 
 fi
 

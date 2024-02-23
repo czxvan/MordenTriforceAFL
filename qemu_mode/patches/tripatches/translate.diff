@@ -1,0 +1,53 @@
+diff --git a/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c b/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
+index 037bc47e7..06f16708e 100644
+--- a/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
++++ b/qemu_mode/qemu-8.2.0/target/i386/tcg/translate.c
+@@ -5694,6 +5694,13 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
+             s->base.is_jmp = DISAS_EOB_ONLY;
+         }
+         break;
++    case 0x124: /* pseudo-instr: 0x0f 0x24 - AFL call */
++        qemu_log("before: gen_helper_aflCall(cpu_regs[R_EAX]:%p, cpu_env:%p, cpu_regs[R_EDI]:%p, cpu_regs[R_ESI]:%p, cpu_regs[R_EDX]:%p);\n",
++                                    cpu_regs[R_EAX], cpu_env, cpu_regs[R_EDI], cpu_regs[R_ESI], cpu_regs[R_EDX]);
++        gen_helper_aflCall(cpu_regs[R_EAX], tcg_env, cpu_regs[R_EDI], cpu_regs[R_ESI], cpu_regs[R_EDX]);
++        qemu_log("after : gen_helper_aflCall(cpu_regs[R_EAX]:%p, cpu_env:%p, cpu_regs[R_EDI]:%p, cpu_regs[R_ESI]:%p, cpu_regs[R_EDX]:%p);\n",
++                                    cpu_regs[R_EAX], cpu_env, cpu_regs[R_EDI], cpu_regs[R_ESI], cpu_regs[R_EDX]);
++        break;
+     case 0x105: /* syscall */
+         /* For Intel SYSCALL is only valid in long mode */
+         if (!LMA(s) && env->cpuid_vendor1 == CPUID_VENDOR_INTEL_1) {
+@@ -7073,3 +7080,5 @@ void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
+ 
+     translator_loop(cpu, tb, max_insns, pc, host_pc, &i386_tr_ops, &dc.base);
+ }
++
++// #include "../patches/aflCall_helper.h"
+\ No newline at end of file
+diff --git a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
+index b3660173d..a2e468144 100644
+--- a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
++++ b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate.c
+@@ -8562,9 +8562,20 @@ static bool trans_SVC(DisasContext *s, arg_SVC *a)
+             uint32_t syndrome = syn_aa32_svc(a->imm, s->thumb);
+             gen_exception_insn_el(s, 0, EXCP_UDEF, syndrome, 2);
+         } else {
+-            gen_update_pc(s, curr_insn_len(s));
+-            s->svc_imm = a->imm;
+-            s->base.is_jmp = DISAS_SWI;
++            target_ulong svc_imm = extract32(s->insn, 0, 24);
++            if(svc_imm == 0x4c4641) {
++                TCGv_i32 tmp = load_reg(s, 0);
++                TCGv_i32 tmp2 = load_reg(s, 1);
++                TCGv_i32 tmp3 = load_reg(s, 2);
++                gen_helper_aflCall32(tmp, tcg_env, tmp, tmp2, tmp3);
++                tcg_temp_free_i32(tmp3);
++                tcg_temp_free_i32(tmp2);
++                store_reg(s, 0, tmp);
++            } else {
++                gen_update_pc(s, curr_insn_len(s));
++                s->svc_imm = a->imm;
++                s->base.is_jmp = DISAS_SWI;
++            }
+         }
+     }
+     return true;

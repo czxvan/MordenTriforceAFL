@@ -1,0 +1,28 @@
+diff --git a/qemu_mode/qemu-8.2.0/system/vl.c b/qemu_mode/qemu-8.2.0/system/vl.c
+index 2bcd9efb9..936f8c25c 100644
+--- a/qemu_mode/qemu-8.2.0/system/vl.c
++++ b/qemu_mode/qemu-8.2.0/system/vl.c
+@@ -133,6 +133,7 @@
+ #include "sysemu/iothread.h"
+ #include "qemu/guest-random.h"
+ #include "qemu/keyval.h"
++#include "../patches/afl.h"
+ 
+ #define MAX_VIRTIO_CONSOLES 1
+ 
+@@ -2898,6 +2899,15 @@ void qemu_init(int argc, char **argv)
+                     exit(1);
+                 }
+                 break;
++            case QEMU_OPTION_aflFile:
++                aflFile = (char *)optarg;
++                break;
++            case QEMU_OPTION_aflPanicAddr:
++                aflPanicAddr = strtoul(optarg, NULL, 16);
++                break;
++            case QEMU_OPTION_aflDmesgAddr:
++                aflDmesgAddr = strtoul(optarg, NULL, 16);
++                break;
+             case QEMU_OPTION_kernel:
+                 qdict_put_str(machine_opts_dict, "kernel", optarg);
+                 break;

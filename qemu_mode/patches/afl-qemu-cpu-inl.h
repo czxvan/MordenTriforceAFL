@@ -34,6 +34,8 @@
 */
 
 #include <sys/shm.h>
+#include "afl.h"
+#define IN_QEMU // Avoid redfine likely and unlikel macros
 #include "../../config.h"
 
 /***************************
@@ -53,12 +55,13 @@
    _start and does the usual forkserver stuff, not very different from
    regular instrumentation injected via afl-as.h. */
 
-#define AFL_QEMU_CPU_SNIPPET2 do { \
-    if(itb->pc == afl_entry_point) { \
+#define AFL_QEMU_CPU_SNIPPET2(env, pc) do { \
+    if(pc == afl_entry_point && pc && getenv("AFLGETWORK") == 0) { \
       afl_setup(); \
-      afl_forkserver(cpu); \
+      afl_forkserver(env); \
+      aflStart = 1; \
     } \
-    afl_maybe_log(itb->pc); \
+    afl_maybe_log(pc); \
   } while (0)
 
 /* We use one additional file descriptor to relay "needs translation"
@@ -68,17 +71,30 @@
 
 /* This is equivalent to afl-as.h: */
 
-static unsigned char *afl_area_ptr;
+static unsigned char *afl_area_ptr = 0;
 
 /* Exported variables populated by the code patched into elfload.c: */
 
-abi_ulong afl_entry_point, /* ELF entry point (_start) */
-          afl_start_code,  /* .text start pointer      */
-          afl_end_code;    /* .text end pointer        */
+target_ulong afl_entry_point = 0, /* ELF entry point (_start) */
+          afl_start_code = 0,  /* .text start pointer      */
+          afl_end_code = 0;    /* .text end pointer        */
+
+int aflStart = 0;               /* we've started fuzzing */
+int aflEnableTicks = 0;         /* re-enable ticks for each test */
+int aflGotLog = 0;              /* we've seen dmesg logging */
+
+int afl_qemuloop_pipe[2];        /* to notify mainloop to become forkserver */
+CPUState *restart_cpu = NULL;    /* cpu to restart */
+
+/* from command line options */
+const char *aflFile = "/tmp/work";
+unsigned long aflPanicAddr = (unsigned long)-1;
+unsigned long aflDmesgAddr = (unsigned long)-1;
 
 /* Set in the child process in forkserver mode: */
 
-static unsigned char afl_fork_child;
+unsigned char afl_fork_child = 0;
+int afl_wants_cpu_to_stop = 0;
 unsigned int afl_forksrv_pid;
 
 /* Instrumentation ratio: */
@@ -87,11 +103,9 @@ static unsigned int afl_inst_rms = MAP_SIZE;
 
 /* Function declarations. */
 
-static void afl_setup(void);
-static void afl_forkserver(CPUState*);
-static inline void afl_maybe_log(abi_ulong);
+static inline void afl_maybe_log(target_ulong);
 
-static void afl_wait_tsl(CPUState*, int);
+static void afl_wait_tsl(CPUArchState*, int);
 static void afl_request_tsl(vaddr, uint64_t, uint32_t, uint32_t);
 
 /* Data structure passed around by the translate handlers: */
@@ -119,7 +133,7 @@ static inline TranslationBlock *tb_lookup(CPUState*, vaddr,
 
 /* Set up SHM region and initialize other stuff. */
 
-static void afl_setup(void) {
+void afl_setup(void) {
 
   char *id_str = getenv(SHM_ENV_VAR),
        *inst_r = getenv("AFL_INST_RATIO");
@@ -157,7 +171,7 @@ static void afl_setup(void) {
   if (getenv("AFL_INST_LIBS")) {
 
     afl_start_code = 0;
-    afl_end_code   = (abi_ulong)-1;
+    afl_end_code   = (target_ulong)-1;
 
   }
 
@@ -169,10 +183,18 @@ static void afl_setup(void) {
 
 }
 
+static ssize_t uninterrupted_read(int fd, void *buf, size_t cnt) {
+
+    ssize_t n;
+
+    while((n = read(fd, buf, cnt)) == -1 && errno == EINTR)
+        continue;
+    return n;
+}
 
 /* Fork server logic, invoked once we hit _start. */
 
-static void afl_forkserver(CPUState *cpu) {
+void afl_forkserver(CPUArchState *env) {
 
   static unsigned char tmp[4];
 
@@ -194,7 +216,7 @@ static void afl_forkserver(CPUState *cpu) {
 
     /* Whoops, parent dead? */
 
-    if (read(FORKSRV_FD, tmp, 4) != 4) exit(2);
+    if (uninterrupted_read(FORKSRV_FD, tmp, 4) != 4) exit(2);
 
     /* Establish a channel with child to grab translation commands. We'll
        read from t_fd[0], child will write to TSL_FD. */
@@ -225,45 +247,79 @@ static void afl_forkserver(CPUState *cpu) {
 
     /* Collect translation requests until child dies and closes the pipe. */
 
-    afl_wait_tsl(cpu, t_fd[0]);
+    afl_wait_tsl(env, t_fd[0]);
 
     /* Get and relay exit status to parent. */
 
     if (waitpid(child_pid, &status, 0) < 0) exit(6);
+    status = 0;
     if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(7);
-
   }
 
 }
 
 
-/* The equivalent of the tuple logging routine from afl-as.h. */
-
-static inline void afl_maybe_log(abi_ulong cur_loc) {
-
-  static __thread abi_ulong prev_loc;
+static inline target_ulong aflHash(target_ulong cur_loc) {
+  if(!aflStart)
+    return 0;
 
   /* Optimize for cur_loc > afl_end_code, which is the most likely case on
      Linux systems. */
 
   if (cur_loc > afl_end_code || cur_loc < afl_start_code || !afl_area_ptr)
-    return;
+    return 0;
+
+#ifdef DEBUG_EDGES
+  if(1) {
+    printf("exec %lx\n", cur_loc);
+    fflush(stdout);
+  }
+#endif
 
   /* Looks like QEMU always maps to fixed locations, so ASAN is not a
      concern. Phew. But instruction addresses may be aligned. Let's mangle
      the value to get something quasi-uniform. */
+  target_ulong h = cur_loc;
+#if TARGET_LONG_BITS == 32
+  h ^= cur_loc >> 16;
+  h *= 0x85ebca6b;
+  h ^= h >> 13;
+  h *= 0xc2b2ae35;
+  h ^= h >> 16;
+#else
+  h ^= cur_loc >> 33;
+  h *= 0xff51afd7ed558ccd;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53;
+  h ^= h >> 33;
+#endif
 
-  cur_loc  = (cur_loc >> 4) ^ (cur_loc << 8);
-  cur_loc &= MAP_SIZE - 1;
+  h &= MAP_SIZE - 1;
 
   /* Implement probabilistic instrumentation by looking at scrambled block
      address. This keeps the instrumented locations stable across runs. */
 
-  if (cur_loc >= afl_inst_rms) return;
+  if (h >= afl_inst_rms) return 0;
+  return h;
+}
+
+/* todo: generate calls to helper_aflMaybeLog during translation */
+static inline void helper_aflMaybeLog(target_ulong cur_loc) {
+  static __thread target_ulong prev_loc;
 
   afl_area_ptr[cur_loc ^ prev_loc]++;
+  qemu_log("afl_area_ptr[%lx ^ %lx] = %d\n", cur_loc, prev_loc, (int)afl_area_ptr[cur_loc ^ prev_loc]);
   prev_loc = cur_loc >> 1;
+}
 
+/* The equivalent of the tuple logging routine from afl-as.h. */
+
+static inline void afl_maybe_log(target_ulong cur_loc) {
+  cur_loc = aflHash(cur_loc);
+  if(cur_loc) {
+    // qemu_log("afl_maybe_log(%lx)\n", cur_loc);
+    helper_aflMaybeLog(cur_loc);
+  }
 }
 
 
@@ -291,10 +347,10 @@ static void afl_request_tsl(vaddr pc, uint64_t cb, uint32_t flags, uint32_t cfla
 /* This is the other side of the same channel. Since timeouts are handled by
    afl-fuzz simply killing the child, we can just wait until the pipe breaks. */
 
-static void afl_wait_tsl(CPUState *cpu, int fd) {
+static void afl_wait_tsl(CPUArchState *env, int fd) {
 
   struct afl_tsl t;
-  TranslationBlock *tb;
+  // TranslationBlock *tb;
 
   while (1) {
 
@@ -303,14 +359,8 @@ static void afl_wait_tsl(CPUState *cpu, int fd) {
     if (read(fd, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
       break;
 
-    tb = tb_htable_lookup(cpu, t.pc, t.cs_base, t.flags, t.cflags);
-
-    if(!tb) {
-      mmap_lock();
-      tb_gen_code(cpu, t.pc, t.cs_base, t.flags, 0);
-      mmap_unlock();
-    }
-
+    printf("wait_tsl %lx -- ignore\n", t.pc); fflush(stdout);
+    
   }
 
   close(fd);

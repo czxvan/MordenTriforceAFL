@@ -1,0 +1,27 @@
+diff --git a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
+index a2e49c39f..a56926705 100644
+--- a/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
++++ b/qemu_mode/qemu-8.2.0/target/arm/tcg/translate-a64.c
+@@ -2344,8 +2344,20 @@ static bool trans_SVC(DisasContext *s, arg_i *a)
+         gen_exception_insn_el(s, 0, EXCP_UDEF, syndrome, 2);
+         return true;
+     }
+-    gen_ss_advance(s);
+-    gen_exception_insn(s, 4, EXCP_SWI, syndrome);
++    
++    if(a->imm == 0xfa32) { // 0xd41f4641
++        TCGv_i64 tmp = read_cpu_reg_sp(s, 0, 1);
++        TCGv_i64 tmp2 = read_cpu_reg_sp(s, 1, 1);
++        TCGv_i64 tmp3 = read_cpu_reg_sp(s, 2, 1);
++        gen_helper_aflCall(tmp, tcg_env, tmp, tmp2, tmp3);
++        tcg_gen_mov_i64(cpu_reg(s, 0), tmp);
++        tcg_temp_free_i64(tmp3);
++        tcg_temp_free_i64(tmp2);
++        tcg_temp_free_i64(tmp);
++    } else {
++        gen_ss_advance(s);
++        gen_exception_insn(s, 4, EXCP_SWI, syndrome);
++    }
+     return true;
+ }
+ 

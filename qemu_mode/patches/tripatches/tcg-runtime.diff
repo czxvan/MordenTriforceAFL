@@ -1,0 +1,24 @@
+diff --git a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.c b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.c
+index 9fa539ad3..deff418c1 100644
+--- a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.c
++++ b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.c
+@@ -152,3 +152,5 @@ void HELPER(exit_atomic)(CPUArchState *env)
+ {
+     cpu_loop_exit_atomic(env_cpu(env), GETPC());
+ }
++
++#include "../patches/aflCall_helper.h"
+\ No newline at end of file
+diff --git a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.h b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.h
+index c23b5e66c..790d03068 100644
+--- a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.h
++++ b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-runtime.h
+@@ -1,3 +1,8 @@
++DEF_HELPER_FLAGS_0(aflInterceptPanic, 0, void)
++DEF_HELPER_FLAGS_1(aflInterceptLog, 0, void, env)
++DEF_HELPER_FLAGS_4(aflCall32, 0, i32, env, i32, i32, i32)
++DEF_HELPER_FLAGS_4(aflCall, 0, i64, env, i64, i64, i64)
++
+ DEF_HELPER_FLAGS_2(div_i32, TCG_CALL_NO_RWG_SE, s32, s32, s32)
+ DEF_HELPER_FLAGS_2(rem_i32, TCG_CALL_NO_RWG_SE, s32, s32, s32)
+ DEF_HELPER_FLAGS_2(divu_i32, TCG_CALL_NO_RWG_SE, i32, i32, i32)

@@ -1,0 +1,49 @@
+diff --git a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-accel-ops-mttcg.c b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-accel-ops-mttcg.c
+index fac80095b..71b65af29 100644
+--- a/qemu_mode/qemu-8.2.0/accel/tcg/tcg-accel-ops-mttcg.c
++++ b/qemu_mode/qemu-8.2.0/accel/tcg/tcg-accel-ops-mttcg.c
+@@ -35,6 +35,8 @@
+ #include "tcg/startup.h"
+ #include "tcg-accel-ops.h"
+ #include "tcg-accel-ops-mttcg.h"
++#include "../patches/afl.h"
++#include "qemu/log.h"
+ 
+ typedef struct MttcgForceRcuNotifier {
+     Notifier notifier;
+@@ -85,6 +87,7 @@ static void *mttcg_cpu_thread_fn(void *arg)
+     cpu_thread_signal_created(cpu);
+     qemu_guest_random_seed_thread_part2(cpu->random_seed);
+ 
++    qemu_log("cpu = %p, cpu->thread = %lx, cpu->thread_id = %d\n", cpu, cpu->thread->thread, cpu->thread_id);
+     /* process any pending work */
+     cpu->exit_request = 1;
+ 
+@@ -116,9 +119,26 @@ static void *mttcg_cpu_thread_fn(void *arg)
+ 
+         qatomic_set_mb(&cpu->exit_request, 0);
+         qemu_wait_io_event(cpu);
+-    } while (!cpu->unplug || cpu_can_run(cpu));
++    } while ((!cpu->unplug || cpu_can_run(cpu)) && !afl_wants_cpu_to_stop);
++
++    if(afl_wants_cpu_to_stop) {
++        /* tell iothread to run AFL forkserver */
++        afl_wants_cpu_to_stop = 0;
++        if(write(afl_qemuloop_pipe[1], "FORK", 4) != 4)
++            perror("write afl_qemuloop_pip");
++        afl_qemuloop_pipe[1] = -1;
++
++        restart_cpu = first_cpu;
++        current_cpu = NULL;
++        cpu_disable_ticks();
++
++        /* let iothread through once ... */
++        qemu_wait_io_event(cpu);
++        sleep(1);
++    }
+ 
+     tcg_cpus_destroy(cpu);
++    tcg_unregister_thread();
+     qemu_mutex_unlock_iothread();
+     rcu_remove_force_rcu_notifier(&force_rcu.notifier);
+     rcu_unregister_thread();

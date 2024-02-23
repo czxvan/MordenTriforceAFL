@@ -1,7 +1,7 @@
 diff --git a/qemu_mode/qemu-8.2.0/linux-user/elfload.c b/qemu_mode/qemu-8.2.0/linux-user/elfload.c
-index cf9e744..2ce4294 100644
---- qemu-8.2.0/linux-user/elfload.c
-+++ qemu-8.2.0/linux-user/elfload.c
+index cf9e74468..2ce42940e 100644
+--- a/qemu_mode/qemu-8.2.0/linux-user/elfload.c
++++ b/qemu_mode/qemu-8.2.0/linux-user/elfload.c
 @@ -41,6 +41,8 @@
  #define TARGET_ARCH_HAS_SIGTRAMP_PAGE 0
  #endif

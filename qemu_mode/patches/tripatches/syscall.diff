@@ -1,7 +1,7 @@
 diff --git a/qemu_mode/qemu-8.2.0/linux-user/syscall.c b/qemu_mode/qemu-8.2.0/linux-user/syscall.c
-index e384e14..8133bf9 100644
---- qemu-8.2.0/linux-user/syscall.c
-+++ qemu-8.2.0/linux-user/syscall.c
+index e384e1424..8133bf99e 100644
+--- a/qemu_mode/qemu-8.2.0/linux-user/syscall.c
++++ b/qemu_mode/qemu-8.2.0/linux-user/syscall.c
 @@ -144,6 +144,8 @@
  #include "fd-trans.h"
  #include "cpu_loop-common.h"

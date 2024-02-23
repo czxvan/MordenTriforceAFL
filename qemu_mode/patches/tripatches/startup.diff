@@ -1,0 +1,16 @@
+diff --git a/qemu_mode/qemu-8.2.0/include/tcg/startup.h b/qemu_mode/qemu-8.2.0/include/tcg/startup.h
+index f71305765..520942a4a 100644
+--- a/qemu_mode/qemu-8.2.0/include/tcg/startup.h
++++ b/qemu_mode/qemu-8.2.0/include/tcg/startup.h
+@@ -45,6 +45,11 @@ void tcg_init(size_t tb_size, int splitwx, unsigned max_cpus);
+  */
+ void tcg_register_thread(void);
+ 
++/**
++ * tcg_unregister_thread: Unregister this thread with the TCG runtime
++ */
++void tcg_unregister_thread(void);
++
+ /**
+  * tcg_prologue_init(): Generate the code for the TCG prologue
+  *
