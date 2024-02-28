@@ -1,3 +1,133 @@
+# MordenTriforceAFL
+Based on ProjectTriforce, but with updated versions of QEMU(8.2.0) and AFL(2.57b).
+
+---
+## To build
+```shell
+  make
+  cd qemu_mode
+  ./build_qemu_support.sh
+```
+---
+## To test
+x86_64
+```shell
+  cd test-triforceafl/x86_64
+  ./runFuzz
+```
+arm
+```shell
+  cd test-triforceafl/arm
+  ./runFuzz
+```
+
+# ProjectTriforce
+
+New: For those looking to play with TriforceAFL and TLSF, Richard Johnson created a Dockerfile which installs both (and even builds a Linux kernel for you). It's available here <https://hub.docker.com/r/moflow/afl-triforce/tags/>.
+
+Also new: afl-tmin now works with the forkserver!
+
+
+https://github.com/nccgroup/TriforceAFL
+Jesse Hertz <jesse.hertz@nccgroup.trust>
+Tim Newsham <tim.newsham@nccgroup.trust>
+
+This is a patched version of AFL that supports full-system
+fuzzing using QEMU. The included QEMU has been updated to allow tracing
+of branches when running a system emulator for x86_64.
+Extra instructions have been added to start AFL's forkserver,
+make fuzz settings, and mark the start and stop of test cases.
+
+Note: not all of the AFL tools have been tested with the
+new changes.  These tools have seen some testing:
+
+   - afl-fuzz - patched to support -QQ 
+   - afl-showmap - patched to support -QQ and forkserver (with batching)
+   - afl-cmin - patched to support -QQ and use forkserver, 
+                stdin no longer supported
+   - afl-analyze - patched to support -QQ
+   - afl-tmin - patched to support -QQ,  but does not support forkserver!
+
+---
+To build:
+```shell
+  make
+```
+---
+To get a coverage map:
+```shell
+  echo hello > /tmp/hello
+  ./afl-showmap -o coverage.txt -QQ -- \
+      ./afl-qemu-system-trace -kernel ../bzImage \
+      -initrd ../initramfs.cpio.gz -m 1G -nographic \
+      -append "console=ttyS0" -aflFile /tmp/hello
+  cat coverage.txt
+```
+
+---
+To fuzz:
+```shell
+  # figure out what addrs to use below...
+  egrep ' (panic|log_store)$' ../mykern/kallsyms
+    ffffffff8108e570 t log_store
+    ffffffff8181064b T panic
+
+  mkdir inputs
+  echo hello > inputs/hello
+  ./afl-fuzz -i inputs -o outputs -QQ -- \
+        afl-qemu-system-trace -kernel bzImage -initrd root.cpio.gz \
+        -m 1G -nographic -append "console=ttyS0" \
+        -aflPanicAddr ffffffff8181064b -aflDmesgAddr ffffffff8108e570 \
+        -aflFile @@
+```
+(Note: unlike when using the "-Q" option, you must specify the
+full command line to afl-qemu-system-trace when using the "-QQ" option).
+
+For more details on how to use this modified version of AFL,
+see our Linux syscall fuzzer at 
+https://github.com/nccgroup/TriforceLinuxSyscallFuzzer.
+  
+---
+New AFL flags:
+   -QQ  - use qemu in full-system emulation rather than user-mode (-Q)
+
+New QEMU flags:
+   -aflFile - The name of the file containing fuzzer inputs
+   -aflPanicAddr - A address of a kernel panic address for panic detection
+   -aflDmesgAddr - Linux kernel address of dmesg logging function for
+                   detecting logging and intercepting log messages
+
+New QEMU instructions:
+   0f 24 - aflCall
+      edi=1 startForkserver(esi=enableTicks)
+            Start AFL's fork server.  After this point each test
+            will run in a separate forked child.  If enableTicks is
+            non-zero, QEMU will re-enable the CPUs timer after
+            forking a child, otherwise it will not be enabled.
+      edi=2 getWork(esi=ptr, edx=sz)
+            Fill ptr[0..sz] with the next input test case. Returns
+            the actual size filled (<= sz).
+      edi=3 startWork(esi=ptr)
+            Tell AFL to start tracing.  The argument points to a
+            buffer with two quadwords giving the start and end
+            address of the code to trace.  Instructions outside
+            of this range are not traced.
+      edi=4 doneWork(esi=exitCode)
+            Tell AFL that the test case has completed.  If a panic
+            is detected, AFL will stop the test case immediately.
+            Otherwise it will run until doneWork is called.
+            The exitCode specified is returned to AFL.  (The
+            code can, but currently does not, OR in the value 64
+            to all exit codes if any dmesg logs were detected during
+            the test case.)
+
+New QEMU block driver:
+   -drive filename=privmem:<name> 
+      This block driver keeps the drive's image in copy-on-write memory
+      so that changes are never persisted to disk.  Changes made by
+      on test case are isolated from other test cases.
+
+
 # american fuzzy lop
 
 [![Build Status](https://travis-ci.org/google/AFL.svg?branch=master)](https://travis-ci.org/google/AFL)
