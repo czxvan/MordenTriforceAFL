@@ -1,5 +1,5 @@
 VERSION="8.2.0"
-CPU_TARGET="x86_64"
+CPU_TARGET="arm"
 
 cd qemu-$VERSION || exit 1
 

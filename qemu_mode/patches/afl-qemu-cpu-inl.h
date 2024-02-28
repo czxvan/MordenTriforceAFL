@@ -308,7 +308,7 @@ static inline void helper_aflMaybeLog(target_ulong cur_loc) {
   static __thread target_ulong prev_loc;
 
   afl_area_ptr[cur_loc ^ prev_loc]++;
-  qemu_log("afl_area_ptr[%lx ^ %lx] = %d\n", cur_loc, prev_loc, (int)afl_area_ptr[cur_loc ^ prev_loc]);
+  // qemu_log("afl_area_ptr[%x ^ %x] = %d\n", cur_loc, prev_loc, (int)afl_area_ptr[cur_loc ^ prev_loc]);
   prev_loc = cur_loc >> 1;
 }
 
@@ -317,7 +317,6 @@ static inline void helper_aflMaybeLog(target_ulong cur_loc) {
 static inline void afl_maybe_log(target_ulong cur_loc) {
   cur_loc = aflHash(cur_loc);
   if(cur_loc) {
-    // qemu_log("afl_maybe_log(%lx)\n", cur_loc);
     helper_aflMaybeLog(cur_loc);
   }
 }

@@ -2,8 +2,8 @@
 
 extern target_ulong afl_start_code, afl_end_code;
 target_ulong startForkserver(CPUArchState *env, target_ulong enableTicks);
-target_ulong startWork(CPUArchState *env, target_ulong ptr);
 target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz);
+target_ulong startWork(CPUArchState *env, target_ulong ptr);
 target_ulong doneWork(target_ulong val);
 const char *peekStrZ(CPUArchState *env, target_ulong ptr, int maxlen);
 
@@ -42,7 +42,7 @@ target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz)
     target_ulong retsz;
     FILE *fp;
     unsigned char ch;
-    qemu_log("get_work!\n");
+    qemu_log("get_work:\n");
     //printf("pid %d: getWork %lx %lx\n", getpid(), ptr, sz);fflush(stdout);
     assert(aflStart == 0);
     fp = fopen(aflFile, "rb");
@@ -54,10 +54,12 @@ target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz)
     while(retsz < sz) {
         if(fread(&ch, 1, 1, fp) == 0)
             break;
+        qemu_log("%c", ch);
         cpu_stb_data(env, ptr, ch);
         retsz ++;
         ptr ++;
     }
+    qemu_log("\n");
     fclose(fp);
     return retsz;
 }
@@ -69,7 +71,7 @@ target_ulong startWork(CPUArchState *env, target_ulong ptr)
     // qemu_log("pid %d: ptr %lx\n", getpid(), ptr);
     start = cpu_ldq_data(env, ptr);
     end = cpu_ldq_data(env, ptr + sizeof start);
-    qemu_log("pid %d: startWork %lx - %lx\n", getpid(), start, end);
+    // qemu_log("pid %d: startWork %x - %x\n", getpid(), start, end);
 
     afl_start_code = start;
     afl_end_code   = end;
@@ -133,7 +135,8 @@ void helper_aflInterceptLog(CPUArchState *env)
     if(!aflStart)
         return;
     aflGotLog = 1;
-
+    
+#ifdef TARGET_X86_64
     FILE *fp = NULL;
     if(fp == NULL) {
         fp = fopen("logstore.txt", "a");
@@ -145,13 +148,14 @@ void helper_aflInterceptLog(CPUArchState *env)
     }
     if(!fp) 
         return;
-
-    target_ulong stack = env->regs[R_ESP];
+    
+    target_ulong stack = env->regs[R_ESP];;
     //target_ulong level = env->regs[R_ESI]; // arg 2
     target_ulong ptext = cpu_ldq_data(env, stack + 0x8); // arg7
     target_ulong len   = cpu_ldq_data(env, stack + 0x10) & 0xffff; // arg8
     const char *msg = peekStrZ(env, ptext, len);
     fprintf(fp, "%s\n", msg);
+#endif
 }
 
 void helper_aflInterceptPanic(void)
