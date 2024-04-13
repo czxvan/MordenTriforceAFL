@@ -7,7 +7,7 @@ PANIC="80894eb4"
 export AFL_SKIP_CRASHES=1
 
 ../../afl-fuzz -m none -M M0 -t 500+ -i $INP -o $OUT -QQ -- \
-    ../../qemu_mode/qemu-8.2.0/build/qemu-system-arm \
+    /usr/bin/gdbserver 127.0.0.1:1234 ../../qemu_mode/qemu-8.2.0/build/qemu-system-arm \
     -M vexpress-a9 -smp 1 -m 256 \
     -kernel kern/zImage -dtb kern/vexpress-v2p-ca9.dtb \
     -drive file=rootfs.ext2,if=sd,format=raw \

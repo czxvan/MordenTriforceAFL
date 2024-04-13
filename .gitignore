@@ -34,7 +34,7 @@ qemu_mode/qemu_log.txt
 qemu-8.2.0.tar.xz
 qemu_mode/qemu-8.2.0/*
 
-.vscode
+# .vscode
 
 # test-triforceafl
 test-triforceafl/*/rootfs
